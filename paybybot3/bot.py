@@ -1,8 +1,8 @@
+import uuid
+import json
 from datetime import datetime
 import re
-
 import requests
-
 
 class Bot:
     base_headers = {
@@ -42,29 +42,55 @@ class Bot:
         )
         j = r.json()
         self.authorization = j["token_type"] + " " + j["access_token"]
-
-        r = self._get("https://consumer.paybyphoneapis.com/parking/accounts")
-        j = r.json()
-        self.parkingAccountId = j[0]["id"]
+        
+    def _graphql(self, query, variables):
+        return requests.post(
+            "https://consumer.paybyphoneapis.com/uapi/graphql",
+            headers={
+                **self.base_headers,
+                "Accept": "application/json, text/plain, */*",
+                "x-pbp-version": "2",
+                "x-api-key": self.apiKey,
+                "Authorization": self.authorization,
+            },
+            json={
+                "operationName": None,
+                "variables": variables,
+                "query": query
+            }
+        ).json()
 
     def _get_parking_sessions(self):
-        ans = self._get(
-            "https://consumer.paybyphoneapis.com/parking/accounts/%s/sessions"
-            % self.parkingAccountId,
-            params={"periodType": "Current"},
-        ).json()
+        query = """query GetParkingSessionsV1($input: GetParkingSessionsInput!) {
+          getParkingSessionsV1(input: $input) {
+            parkingSessionId
+            locationId
+            startTime
+            expireTime
+            vehicle {
+              licensePlate
+            }
+          }
+        }"""
+        variables = {"input": {"periodType": "CURRENT", "offset": 0, "limit": 10}}
+        ans = self._graphql(query, variables).get("data", {}).get("getParkingSessionsV1", [])
         for s in ans:
-            s["startTime"] = datetime.strptime(s["startTime"], "%Y-%m-%dT%H:%M:%SZ")
-            s["expireTime"] = datetime.strptime(s["expireTime"], "%Y-%m-%dT%H:%M:%SZ")
+            try:
+                s["startTime"] = datetime.strptime(s["startTime"][:19], "%Y-%m-%dT%H:%M:%S")
+                s["expireTime"] = datetime.strptime(s["expireTime"][:19], "%Y-%m-%dT%H:%M:%S")
+            except Exception:
+                pass
+            if "vehicle" in s and s["vehicle"]:
+                s["vehicle"]["licensePlate"] = s["vehicle"].get("licensePlate")
         return ans
 
     def get_parking_sessions(self, licensePlate=None, locationId=None):
         def pred(p):
             if licensePlate is not None:
-                if p["vehicle"]["licensePlate"] != licensePlate:
+                if p.get("vehicle", {}).get("licensePlate") != licensePlate:
                     return False
             if locationId is not None:
-                if p["locationId"] != locationId:
+                if p.get("locationId") != locationId:
                     return False
             return True
 
@@ -80,51 +106,29 @@ class Bot:
         )
 
     def get_payment_accounts(self):
-        return self._get("https://payments.paybyphoneapis.com/v1/accounts").json()
+        query = """query GetPaymentAccountsV1($input: GetPaymentAccountsInput!) {
+          getPaymentAccountsV1(input: $input) {
+            paymentCards { cardType maskedCardNumber accountType paymentAccountId paymentScope corporateClientId expiryMonth expiryYear }
+            mno { status operator phoneNumber paymentAccountId paymentScope corporateClientId expiryMonth expiryYear }
+            twintAccounts { accountType paymentAccountId paymentScope mandates { id status } }
+            paypalAccounts { accountType paymentAccountId paymentScope mandates { id status } }
+          }
+        }"""
+        return self._graphql(query, {"input": {"mandateCountryCode": "FR"}}).get("data", {}).get("getPaymentAccountsV1", {})
 
     def _get_rate_options(self, location, licensePlate):
-        return self._get(
-            "https://consumer.paybyphoneapis.com/parking/locations/%s/rateOptions" % location,
-            params={
-                "parkingAccountId": self.parkingAccountId,
-                "licensePlate": licensePlate,
-            },
-        ).json()
+        pass
 
     def _get_rate_options_renew(self, location, parkingSessionId):
-        return self._get(
-            "https://consumer.paybyphoneapis.com/parking/locations/%s/rateOptions" % location,
-            params={
-                "parkingAccountId": self.parkingAccountId,
-                "parkingSessionId": parkingSessionId,
-            },
-        ).json()
+        pass
 
     def _get_quote(
         self, durationQuantity, durationTimeUnit, licensePlate, locationId, rateOptionId
     ):
-        return self._get(
-            "https://consumer.paybyphoneapis.com/parking/accounts/%s/quote"
-            % self.parkingAccountId,
-            params={
-                "durationQuantity": durationQuantity,
-                "durationTimeUnit": durationTimeUnit,
-                "licensePlate": licensePlate,
-                "locationId": locationId,
-                "rateOptionId": rateOptionId,
-            },
-        ).json()
+        pass
 
     def _get_renew_quote(self, durationQuantity, durationTimeUnit, parkingSessionId):
-        return self._get(
-            "https://consumer.paybyphoneapis.com/parking/accounts/%s/quote"
-            % self.parkingAccountId,
-            params={
-                "durationQuantity": durationQuantity,
-                "durationTimeUnit": durationTimeUnit,
-                "parkingSessionId": parkingSessionId,
-            },
-        )
+        pass
 
     def _post_quote(
         self,
@@ -137,26 +141,7 @@ class Bot:
         durationTimeUnit,
         startTime,
     ):
-        return self._post(
-            "https://consumer.paybyphoneapis.com/parking/accounts/%s/sessions/"
-            % self.parkingAccountId,
-            json={
-                "licensePlate": licensePlate,
-                "locationId": locationId,
-                "stall": None,
-                "rateOptionId": rateOptionId,
-                "startTime": startTime,  # found in parkingStartTime of quote
-                "quoteId": quoteId,
-                "duration": {
-                    "timeUnit": durationTimeUnit,
-                    "quantity": durationQuantity,
-                },
-                "paymentMethod": {
-                    "paymentMethodType": "PaymentAccount",
-                    "payload": {"paymentAccountId": paymentAccountId, "cvv": None},
-                },
-            },
-        )
+        pass
 
     def _put_renew_quote(
         self,
@@ -166,25 +151,18 @@ class Bot:
         durationQuantity,
         durationTimeUnit,
     ):
-        r = self._put(
-            "https://consumer.paybyphoneapis.com/parking/accounts/%s/sessions/%s"
-            % (self.parkingAccountId, parkingSessionId),
-            data={
-                "duration": {
-                    "timeUnit": durationTimeUnit,
-                    "quantity": durationQuantity,
-                },
-                "quoteId": quoteId,
-                "paymentMethod": {
-                    "paymentMethodType": "PaymentAccount",
-                    "payload": {"paymentAccountId": paymentAccountId, "cvv": None},
-                },
-            },
-        )
-        assert r.status_code == requests.codes["accepted"]
+        pass
 
     def _get_workflow(self, quoteId):
-        return self._get("https://consumer.paybyphoneapis.com/events/workflow/%s" % quoteId)
+        pass
+
+    def get_vehicles(self):
+        query = """query GetVehiclesV3($input: GetVehiclesInput!) {
+          getVehiclesV3(input: $input) {
+            licensePlate
+          }
+        }"""
+        return self._graphql(query, {"input": {"profileName": "PayByPhone"}}).get("data", {}).get("getVehiclesV3", [])
 
     def pay(
         self,
@@ -195,50 +173,87 @@ class Bot:
         rateOptionId,
         paymentAccountId,
     ):
-        quote = self._get_quote(
-            durationQuantity=durationQuantity,
-            durationTimeUnit=durationTimeUnit,
-            licensePlate=licensePlate,
-            locationId=locationId,
-            rateOptionId=rateOptionId,
-        )
-        quoteId = quote["quoteId"]
-        startTime = quote["parkingStartTime"]
+        loc_query = """query GetLocationsV1($input: GetLocationInput!) {
+          getLocationsV1(input: $input) { legacyVendorId }
+        }"""
+        loc_resp = self._graphql(loc_query, {"input": {"locationId": locationId}})
+        vendor_id = loc_resp.get("data", {}).get("getLocationsV1", {}).get("legacyVendorId", "6201")
 
-        post = self._post_quote(
-            quoteId=quoteId,
-            paymentAccountId=paymentAccountId,
-            licensePlate=licensePlate,
-            rateOptionId=rateOptionId,
-            locationId=locationId,
-            durationQuantity=durationQuantity,
-            durationTimeUnit=durationTimeUnit,
-            startTime=startTime,
-        )
-        return post.text
+        query_quote = """mutation CreateQuotesV1($requests: [QuoteRequestInput!]!) {
+          createQuotesV1(input: {requests: $requests}) {
+            createQuotesResponse {
+              quotes { quoteId }
+            }
+          }
+        }"""
+        quote_req = {
+            "quoteRequestId": str(uuid.uuid4()),
+            "product": "PARKING",
+            "details": {
+                "locationId": str(locationId),
+                "advertisedLocationId": str(locationId),
+                "ratePolicyId": str(rateOptionId),
+                "parkingQuoteOperation": "Start",
+                "durationTimeUnit": durationTimeUnit,
+                "durationQuantity": str(durationQuantity),
+                "licensePlate": licensePlate,
+                "stall": "",
+                "parkingSessionId": "",
+                "paymentAccountId": str(paymentAccountId) if paymentAccountId else "",
+                "paymentCardType": "",
+                "paymentScope": ""
+            }
+        }
+        quote_resp = self._graphql(query_quote, {"requests": [quote_req]})
+        try:
+            quote_id = quote_resp["data"]["createQuotesV1"]["createQuotesResponse"]["quotes"][0]["quoteId"]
+        except Exception:
+            return "Failed to get quote: " + str(quote_resp)
 
-    def get_vehicles(self):
-        return self._get("https://consumer.paybyphoneapis.com/identity/profileservice/v1/members/vehicles/paybyphone").json()
+        query_start = """mutation StartParkingSessionV1($input: StartParkingSessionV1Input!) {
+          startParkingSessionV1(input: $input) {
+            parkingSessionResponse {
+              parkingSessionId
+              expireTime
+              isEarlyCapture
+              metadata
+            }
+          }
+        }"""
+        start_resp = self._graphql(query_start, {"input": {"request": {"quoteId": quote_id}}})
+        try:
+            session = start_resp["data"]["startParkingSessionV1"]["parkingSessionResponse"]
+            parkingSessionId = session["parkingSessionId"]
+            expireTime = session["expireTime"]
+            isEarlyCapture = session["isEarlyCapture"]
+            metadata = session.get("metadata", {})
+        except Exception:
+            return "Failed to start parking session: " + str(start_resp)
+            
+        if isinstance(metadata, dict):
+            metadata = json.dumps(metadata)
 
-    def _request(self, method, url, **kwargs):
-        return requests.request(
-            method,
-            url,
-            headers={
-                **self.base_headers,
-                "Accept": "application/json, text/plain, */*",
-                "x-pbp-version": "2",
-                "x-api-key": self.apiKey,
-                "Authorization": self.authorization,
-            },
-            **kwargs
-        )
-
-    def _get(self, url, **kwargs):
-        return self._request("GET", url, **kwargs)
-
-    def _post(self, url, **kwargs):
-        return self._request("POST", url, **kwargs)
-
-    def _put(self, url, **kwargs):
-        return self._request("PUT", url, **kwargs)
+        query_job = """mutation CreateJobV1($input: CreateJobV1Input!) {
+          createJobV1(input: $input) {
+            createJobResponse { jobId }
+          }
+        }"""
+        job_req = {
+            "input": {
+                "request": {
+                    "lineItems": [
+                        {
+                            "productType": "parking",
+                            "productReferenceId": parkingSessionId,
+                            "vendorId": vendor_id,
+                            "endingTime": expireTime,
+                            "isEarlyCapture": isEarlyCapture,
+                            "required": True,
+                            "metadata": metadata
+                        }
+                    ]
+                }
+            }
+        }
+        job_resp = self._graphql(query_job, job_req)
+        return json.dumps(job_resp)
