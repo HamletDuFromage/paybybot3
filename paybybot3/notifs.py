@@ -25,4 +25,4 @@ def _create_apprise_object(services):
 
 def _send_notification(apobj, title, body, tag):
     notify_type = TAG_MAPPING_NOTIFY_TYPE.get(tag)
-    apobj.notify(title=title, body=body, tag=tag, notify_type=notify_type)
+    apobj.notify(title=title, body=body, tag=tag, notify_type=notify_type, body_format="text")

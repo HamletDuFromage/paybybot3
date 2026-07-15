@@ -177,7 +177,8 @@ class Bot:
           getLocationsV1(input: $input) { legacyVendorId }
         }"""
         loc_resp = self._graphql(loc_query, {"input": {"locationId": locationId}})
-        vendor_id = loc_resp.get("data", {}).get("getLocationsV1", {}).get("legacyVendorId", "6201")
+        locations = loc_resp.get("data", {}).get("getLocationsV1", [])
+        vendor_id = locations[0]["legacyVendorId"]
 
         query_quote = """mutation CreateQuotesV1($requests: [QuoteRequestInput!]!) {
           createQuotesV1(input: {requests: $requests}) {
